@@ -1,4 +1,4 @@
-name: "🎵 TikTok Downloader – Archive Ready"
+name: "🎵 TikTok Downloader – Fail-Safe Archive"
 
 on:
   workflow_dispatch:
@@ -33,64 +33,82 @@ jobs:
       - name: 🔧 نصب ابزارها
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg curl python3-pip
+          sudo apt-get install -y -qq ffmpeg curl python3-pip coreutils
           pip3 install -U yt-dlp
 
       - name: 🛡️ تنظیم پروکسی (اختیاری)
         run: |
           if [ -n "${CUSTOM_PROXY:-}" ]; then
+            echo "✅ استفاده از پروکسی دستی"
             echo "PROXY_URL=$CUSTOM_PROXY" >> $GITHUB_ENV
-            echo "✅ پروکسی تنظیم شد"
           else
-            echo "PROXY_URL=" >> $GITHUB_ENV
             echo "ℹ️ اجرای بدون پروکسی"
+            echo "PROXY_URL=" >> $GITHUB_ENV
           fi
         env:
           CUSTOM_PROXY: ${{ github.event.inputs.custom_proxy }}
 
-      - name: 📥 دانلود و آرشیو روزانه
+      - name: 📥 دانلود و آرشیو روزانه (Fail‑Safe)
         env:
           USER: ${{ github.event.inputs.tiktok_user }}
           MAX: ${{ github.event.inputs.max_videos }}
         run: |
-          set -euo pipefail
+          set -eo pipefail   # ⚠️ set -u عمداً حذف شده
 
           TODAY=$(date +%F)
           BASE_DIR="raw_tiktok/${USER}/${TODAY}"
           mkdir -p "$BASE_DIR"
 
-          echo "▸ کاربر: @$USER"
-          echo "▸ تاریخ آرشیو: $TODAY"
-          echo "▸ تعداد: $MAX"
-          echo "▸ پروکسی: ${PROXY_URL:-بدون پروکسی}"
+          echo "──────────────────────────────"
+          echo "👤 کاربر: @$USER"
+          echo "📅 تاریخ آرشیو: $TODAY"
+          echo "🔢 تعداد: $MAX"
+          echo "🌐 پروکسی: ${PROXY_URL:-بدون پروکسی}"
+          echo "──────────────────────────────"
 
-          PROXY_ARG=""
+          PROXY_ARG=()
           if [ -n "${PROXY_URL:-}" ]; then
-            PROXY_ARG="--proxy ${PROXY_URL}"
+            PROXY_ARG+=(--proxy "$PROXY_URL")
           fi
 
-          yt-dlp --verbose \
-            $PROXY_ARG \
+          echo "🚀 شروع دانلود ویدیوها..."
+
+          # ⏱️ جلوگیری از Hang شدن yt-dlp
+          timeout 10m yt-dlp --verbose \
+            "${PROXY_ARG[@]}" \
             -f "bv*+ba/b" \
             --merge-output-format mp4 \
             --write-description \
-            --write-thumbnail \
-            --convert-thumbnails jpg \
             --output "${BASE_DIR}/%(id)s.%(ext)s" \
             --playlist-end "$MAX" \
             --sleep-interval 2 \
             --max-sleep-interval 5 \
-            --retries 10 \
+            --retries 5 \
+            --socket-timeout 15 \
             --extractor-args "tiktok:no_watermark=1" \
             --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)" \
-            "https://www.tiktok.com/@${USER}/video" 2>&1 | tee /tmp/tiktok.log
+            "https://www.tiktok.com/@${USER}/video" \
+            2>&1 | tee /tmp/tiktok.log
+
+          YT_RES=${PIPESTATUS[0]}
+          echo "✅ yt-dlp exit code: $YT_RES"
+
+          echo "🖼️ دانلود thumbnail (اختیاری – ایمن)..."
+          timeout 2m yt-dlp \
+            "${PROXY_ARG[@]}" \
+            --skip-download \
+            --write-thumbnail \
+            --convert-thumbnails jpg \
+            --output "${BASE_DIR}/%(id)s.%(ext)s" \
+            "https://www.tiktok.com/@${USER}/video" \
+            || echo "⚠️ دانلود thumbnail ناموفق (ادامه می‌دهیم)"
 
           COUNT=$(find "$BASE_DIR" -name '*.mp4' | wc -l)
-          echo "📊 دانلود شد: $COUNT ویدیو"
+          echo "📊 ویدیوهای دانلود شده: $COUNT"
 
           if [ "$COUNT" -eq 0 ]; then
-            echo "❌ دانلود ناموفق"
-            echo "📄 آخرین لاگ:"
+            echo "❌ هیچ ویدیویی دانلود نشد"
+            echo "📄 آخرین لاگ‌ها:"
             tail -30 /tmp/tiktok.log
             exit 1
           fi
@@ -100,7 +118,9 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+
           git add raw_tiktok/
+
           if ! git diff --cached --quiet; then
             TOTAL=$(find raw_tiktok -name '*.mp4' | wc -l)
             git commit -m "📦 TikTok @$USER – آرشیو روزانه ($TOTAL ویدیو)"
