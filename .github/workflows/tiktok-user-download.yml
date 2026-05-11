@@ -1,4 +1,4 @@
-name: "🎵 TikTok Downloader (Final Stable)"
+name: "🎵 TikTok Downloader (Guaranteed Push)"
 
 on:
   workflow_dispatch:
@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      - name: 📥 Checkout repository
+      - name: 📥 Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -49,30 +49,23 @@ jobs:
             -e WARP_ENABLE_WARP=yes \
             caomingjun/warp
           sleep 25
-          if curl -x socks5h://127.0.0.1:1080 -s --max-time 10 https://www.tiktok.com > /dev/null; then
-            echo "WARP_READY=true" >> $GITHUB_ENV
-            echo "✅ WARP فعال است"
-          else
-            echo "WARP_READY=false" >> $GITHUB_ENV
-            echo "⚠️ ادامه بدون پروکسی"
-          fi
+          [ "$(curl -x socks5h://127.0.0.1:1080 -s --max-time 10 -o /dev/null -w '%{http_code}' https://www.tiktok.com)" = "200" ] && echo "WARP_READY=true" >> $GITHUB_ENV || echo "WARP_READY=false" >> $GITHUB_ENV
 
-      - name: 📥 دانلود ویدیوهای کاربر
+      - name: 📥 دانلود کاربر (در صورت وجود)
         if: github.event.inputs.tiktok_user != ''
         env:
           USER: ${{ github.event.inputs.tiktok_user }}
           MAX: ${{ github.event.inputs.max_videos }}
         run: |
-          set -eu
+          set -euo pipefail
           PROXY=""
           [ "${WARP_READY:-false}" = "true" ] && PROXY="--proxy socks5://127.0.0.1:1080"
 
           TARGET_DIR="raw_tiktok/${USER}"
           mkdir -p "$TARGET_DIR"
+          echo "این پوشه برای ویدیوهای @${USER} ایجاد شده." > "$TARGET_DIR/PLACEHOLDER.md"
 
-          echo "▸ دانلود ${MAX} ویدیوی آخر @${USER} ..."
-
-          # اجرای yt-dlp با continue on error
+          echo "▸ دانلود ${MAX} ویدیو از @${USER} ..."
           set +e
           yt-dlp --verbose \
             $PROXY \
@@ -82,33 +75,30 @@ jobs:
             --no-write-thumbnail \
             --no-playlist-reverse \
             --playlist-end "${MAX}" \
-            --extractor-args "tiktok:no_watermark=1;api_hostname=api16-normal-c-useast1a.tiktokv.com" \
-            --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1" \
+            --extractor-args "tiktok:no_watermark=1;api_hostname=api16-normal-c-useast1a.tiktokv.com;app_version=31.3.2" \
+            --user-agent "com.zhiliaoapp.musically/2023103030 (Linux; U; Android 13; en_US; SM-S9180; Build/TP1A.220624.014; Cronet/TTNetVersion:6f6f6f6f 2023-10-30)" \
             "https://www.tiktok.com/@${USER}" 2>&1 | tee /tmp/tiktok-user.log
           EXIT=$?
           set -e
 
+          DL_COUNT=$(find "$TARGET_DIR" -name "*.mp4" | wc -l)
+          echo "📊 تعداد فایل‌های mp4 دریافت شده: ${DL_COUNT}"
           if [ $EXIT -ne 0 ]; then
-            echo "⚠️ خروج با خطا (کد $EXIT) – ۲۰ خط آخر لاگ:"
+            echo "⚠️ خروج با خطا. ۲۰ خط آخر لاگ:"
             tail -20 /tmp/tiktok-user.log
-          else
-            echo "✅ دانلود کاربر به پایان رسید."
           fi
-          echo "📊 تعداد فایل‌های mp4: $(find "$TARGET_DIR" -name '*.mp4' | wc -l)"
 
-      - name: 📥 دانلود ویدیوی تکی
+      - name: 📥 دانلود لینک تکی
         if: github.event.inputs.single_url != ''
         env:
           SINGLE_URL: ${{ github.event.inputs.single_url }}
         run: |
-          set -eu
+          set -euo pipefail
           PROXY=""
           [ "${WARP_READY:-false}" = "true" ] && PROXY="--proxy socks5://127.0.0.1:1080"
-
           TARGET_DIR="raw_tiktok/single"
           mkdir -p "$TARGET_DIR"
-
-          echo "▸ دانلود ویدیوی تکی: ${SINGLE_URL}"
+          echo "این پوشه برای لینک‌های تک ویدیو ایجاد شده." > "$TARGET_DIR/PLACEHOLDER.md"
 
           set +e
           yt-dlp --verbose \
@@ -117,40 +107,35 @@ jobs:
             --merge-output-format mp4 \
             --output "${TARGET_DIR}/%(id)s.%(ext)s" \
             --no-write-thumbnail \
-            --extractor-args "tiktok:no_watermark=1;api_hostname=api16-normal-c-useast1a.tiktokv.com" \
-            --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1" \
+            --extractor-args "tiktok:no_watermark=1;api_hostname=api16-normal-c-useast1a.tiktokv.com;app_version=31.3.2" \
+            --user-agent "com.zhiliaoapp.musically/2023103030 (Linux; U; Android 13; en_US; SM-S9180; Build/TP1A.220624.014; Cronet/TTNetVersion:6f6f6f6f 2023-10-30)" \
             "${SINGLE_URL}" 2>&1 | tee /tmp/tiktok-single.log
           EXIT=$?
           set -e
-
+          DL_COUNT=$(find "$TARGET_DIR" -name "*.mp4" | wc -l)
+          echo "📊 تعداد فایل‌های mp4: ${DL_COUNT}"
           if [ $EXIT -ne 0 ]; then
-            echo "⚠️ خروج با خطا (کد $EXIT) – ۲۰ خط آخر لاگ:"
+            echo "⚠️ خطا در دانلود تکی. ۲۰ خط آخر لاگ:"
             tail -20 /tmp/tiktok-single.log
-          else
-            echo "✅ دانلود تکی موفق."
           fi
 
-      - name: 📤 Push فایل‌ها به مخزن
+      - name: 📤 Push فایل‌ها
         run: |
-          set -x
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
-          if [ -d "raw_tiktok" ] && [ "$(find raw_tiktok -type f | wc -l)" -gt 0 ]; then
+          if [ -d "raw_tiktok" ]; then
             git add raw_tiktok/
             if ! git diff --cached --quiet; then
-              git commit -m "🎵 آپلود ویدیوهای تیک‌تاک"
+              git commit -m "🎵 به‌روزرسانی raw_tiktok"
               git pull --rebase origin main 2>/dev/null || true
               git push origin main
             else
-              echo "هیچ تغییری برای commit وجود ندارد."
+              echo "هیچ فایل جدیدی برای commit وجود ندارد."
             fi
           else
-            echo "پوشه raw_tiktok خالی است. یک فایل placeholder اضافه می‌شود."
             mkdir -p raw_tiktok
-            echo "هنوز ویدیویی دانلود نشده است." > raw_tiktok/PLACEHOLDER.md
+            echo "پوشه هنوز خالی است." > raw_tiktok/README.md
             git add raw_tiktok/
-            git commit -m "افزودن placeholder"
-            git pull --rebase origin main 2>/dev/null || true
+            git commit -m "ایجاد پوشه raw_tiktok"
             git push origin main
           fi
