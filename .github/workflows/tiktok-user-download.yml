@@ -1,25 +1,22 @@
-name: "🎵 TikTok Downloader – Resilient Proxy"
+name: "🎵 TikTok Downloader – Archive Ready"
 
 on:
   workflow_dispatch:
     inputs:
       tiktok_user:
-        description: '👤 نام کاربری تیک‌تاک (عمومی)'
+        description: '👤 نام کاربری تیک‌تاک'
         required: true
         type: string
       max_videos:
-        description: '🔢 تعداد ویدیوها (حداکثر ۲۰)'
+        description: '🔢 تعداد ویدیوها'
         required: true
         default: '5'
         type: choice
         options: ['1', '3', '5', '10', '20']
       custom_proxy:
-        description: '🌐 پروکسی دستی (مثال http://1.2.3.4:8080)'
+        description: '🌐 پروکسی دستی (اختیاری)'
         required: false
         type: string
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: write
@@ -37,107 +34,78 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg curl python3-pip
-          pip3 install -q yt-dlp
+          pip3 install -U yt-dlp
 
-      - name: 🛡️ دریافت یا تأیید پروکسی (مقاوم در برابر خطا)
-        id: proxy
+      - name: 🛡️ تنظیم پروکسی (اختیاری)
         run: |
-          set +e  # اجازه نده هیچ خطایی گردش کار را متوقف کند
-
-          if [ -n "$CUSTOM_PROXY" ]; then
-            echo "🔹 استفاده از پروکسی دستی: $CUSTOM_PROXY"
+          if [ -n "${CUSTOM_PROXY:-}" ]; then
             echo "PROXY_URL=$CUSTOM_PROXY" >> $GITHUB_ENV
-            exit 0
-          fi
-
-          echo "🔍 تلاش برای دریافت پروکسی خودکار..."
-
-          # تلاش اول: API اول
-          PROXY_LIST=$(curl -s --max-time 10 "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=all&anonymity=all" 2>/dev/null | head -20)
-          if [ -z "$PROXY_LIST" ]; then
-            echo "⚠️ API اول ناموفق بود. تلاش با منبع دوم..."
-            PROXY_LIST=$(curl -s --max-time 10 "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt" 2>/dev/null | head -20)
-          fi
-
-          if [ -z "$PROXY_LIST" ]; then
-            echo "❌ هیچ پروکسی‌ای از منابع آنلاین دریافت نشد."
-            echo "PROXY_URL=" >> $GITHUB_ENV
-            exit 0
-          fi
-
-          # تست سریع اولین پروکسی قابل قبول
-          SELECTED=""
-          while IFS= read -r proxy; do
-            [ -z "$proxy" ] && continue
-            echo "  تست $proxy ..."
-            HTTP_CODE=$(curl -x "$proxy" -s --max-time 5 -o /dev/null -w "%{http_code}" "https://www.tiktok.com" 2>/dev/null)
-            if [ "$HTTP_CODE" = "200" ]; then
-              SELECTED="$proxy"
-              echo "  ✅ انتخاب شد: $proxy"
-              break
-            fi
-          done <<< "$PROXY_LIST"
-
-          if [ -n "$SELECTED" ]; then
-            echo "PROXY_URL=$SELECTED" >> $GITHUB_ENV
-            echo "✅ پروکسی خودکار با موفقیت تنظیم شد."
+            echo "✅ پروکسی تنظیم شد"
           else
-            echo "⚠️ هیچ‌یک از پروکسی‌های تست‌شده پاسخ ندادند."
             echo "PROXY_URL=" >> $GITHUB_ENV
+            echo "ℹ️ اجرای بدون پروکسی"
           fi
         env:
           CUSTOM_PROXY: ${{ github.event.inputs.custom_proxy }}
 
-      - name: 📥 دانلود ویدیوهای کاربر (در صورت وجود پروکسی)
-        if: env.PROXY_URL != ''
+      - name: 📥 دانلود و آرشیو روزانه
         env:
           USER: ${{ github.event.inputs.tiktok_user }}
           MAX: ${{ github.event.inputs.max_videos }}
         run: |
           set -euo pipefail
-          TARGET_DIR="raw_tiktok/${USER}"
-          mkdir -p "$TARGET_DIR"
 
-          echo "▸ دانلود ${MAX} ویدیو از @${USER} با پروکسی ${PROXY_URL}"
+          TODAY=$(date +%F)
+          BASE_DIR="raw_tiktok/${USER}/${TODAY}"
+          mkdir -p "$BASE_DIR"
 
-          set +e
-          yt-dlp --verbose \
-            --proxy "$PROXY_URL" \
-            -f "bestvideo+bestaudio/best" \
-            --merge-output-format mp4 \
-            --output "${TARGET_DIR}/%(id)s.%(ext)s" \
-            --no-playlist-reverse \
-            --playlist-end "${MAX}" \
-            --extractor-args "tiktok:no_watermark=1" \
-            --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1" \
-            "https://www.tiktok.com/@${USER}" 2>&1 | tee /tmp/tiktok.log
-          RES=$?
-          set -e
+          echo "▸ کاربر: @$USER"
+          echo "▸ تاریخ آرشیو: $TODAY"
+          echo "▸ تعداد: $MAX"
+          echo "▸ پروکسی: ${PROXY_URL:-بدون پروکسی}"
 
-          DL_COUNT=$(find "$TARGET_DIR" -name "*.mp4" | wc -l)
-          echo "📊 ویدیوهای دانلودشده: ${DL_COUNT}"
-
-          if [ $DL_COUNT -eq 0 ]; then
-            echo "❌ هیچ ویدیویی دریافت نشد. ۲۰ خط آخر لاگ:"
-            tail -20 /tmp/tiktok.log
-            echo "💡 پیشنهاد: اکانت دیگری (مثلاً tiktok) را تست کنید یا پروکسی دستی وارد کنید."
+          PROXY_ARG=""
+          if [ -n "${PROXY_URL:-}" ]; then
+            PROXY_ARG="--proxy ${PROXY_URL}"
           fi
 
-      - name: 📤 Push فایل‌ها به مخزن (همیشه)
+          yt-dlp --verbose \
+            $PROXY_ARG \
+            -f "bv*+ba/b" \
+            --merge-output-format mp4 \
+            --write-description \
+            --write-thumbnail \
+            --convert-thumbnails jpg \
+            --output "${BASE_DIR}/%(id)s.%(ext)s" \
+            --playlist-end "$MAX" \
+            --sleep-interval 2 \
+            --max-sleep-interval 5 \
+            --retries 10 \
+            --extractor-args "tiktok:no_watermark=1" \
+            --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)" \
+            "https://www.tiktok.com/@${USER}/video" 2>&1 | tee /tmp/tiktok.log
+
+          COUNT=$(find "$BASE_DIR" -name '*.mp4' | wc -l)
+          echo "📊 دانلود شد: $COUNT ویدیو"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "❌ دانلود ناموفق"
+            echo "📄 آخرین لاگ:"
+            tail -30 /tmp/tiktok.log
+            exit 1
+          fi
+
+      - name: 📤 Push آرشیو به مخزن
         if: always()
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          mkdir -p raw_tiktok
-          if [ ! -f raw_tiktok/README.md ]; then
-            echo "# ویدیوهای دانلودشده تیک‌تاک" > raw_tiktok/README.md
-          fi
           git add raw_tiktok/
           if ! git diff --cached --quiet; then
-            COUNT=$(find raw_tiktok -name '*.mp4' | wc -l)
-            git commit -m "🎵 تیک‌تاک @${{ github.event.inputs.tiktok_user }} ($COUNT ویدیو)"
-            git pull --rebase origin main 2>/dev/null || true
+            TOTAL=$(find raw_tiktok -name '*.mp4' | wc -l)
+            git commit -m "📦 TikTok @$USER – آرشیو روزانه ($TOTAL ویدیو)"
+            git pull --rebase origin main || true
             git push origin main
           else
-            echo "هیچ تغییری برای ذخیره وجود ندارد."
+            echo "ℹ️ تغییری برای Commit وجود ندارد"
           fi
